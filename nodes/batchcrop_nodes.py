@@ -105,8 +105,26 @@ class ADBatchCropFromMaskAdvanced:
         combined_cropped_images = []
         combined_cropped_masks = []
 
+        original_count = len(original_images)
+        mask_count = len(masks)
+        if mask_count != original_count:
+            print(
+                f"Warning: mask batch size ({mask_count}) differs from image batch size ({original_count}). "
+                "Missing masks will be treated as empty masks."
+            )
+
         image_h = int(original_images[0].shape[0])
         image_w = int(original_images[0].shape[1])
+        default_mask = torch.zeros(
+            (image_h, image_w),
+            dtype=original_images.dtype,
+            device=original_images.device,
+        )
+
+        def get_mask_for_index(index):
+            if index < mask_count:
+                return masks[index]
+            return default_mask
 
         def calculate_bbox(mask):
             non_zero_indices = np.nonzero(np.array(mask))
@@ -176,7 +194,7 @@ class ADBatchCropFromMaskAdvanced:
                 height = max(1, int(math.ceil(width / aspect)))
             return width, height
 
-        mask_infos = [calculate_bbox(tensor2pil(mask)[0]) for mask in masks]
+        mask_infos = [calculate_bbox(tensor2pil(get_mask_for_index(i))[0]) for i in range(original_count)]
         non_empty_infos = [info for info in mask_infos if info["has_pixels"]]
 
         if preserve_aspect_ratio:
@@ -234,7 +252,10 @@ class ADBatchCropFromMaskAdvanced:
             output_width = target_width
             output_height = target_height
 
-        combined_mask = torch.max(masks, dim=0)[0]
+        if mask_count > 0:
+            combined_mask = torch.max(masks, dim=0)[0]
+        else:
+            combined_mask = default_mask
         combined_info = calculate_bbox(tensor2pil(combined_mask)[0])
 
         if combined_info["has_pixels"]:
@@ -271,7 +292,8 @@ class ADBatchCropFromMaskAdvanced:
 
         self.prev_center = None
 
-        for i, (mask, img, info) in enumerate(zip(masks, original_images, mask_infos)):
+        for i, (img, info) in enumerate(zip(original_images, mask_infos)):
+            mask = get_mask_for_index(i)
             if info["has_pixels"]:
                 curr_center = (round(info["center_x"]), round(info["center_y"]))
             elif self.prev_center is not None:
@@ -310,7 +332,7 @@ class ADBatchCropFromMaskAdvanced:
             combined_cropped_img = original_images[i][new_min_y:new_max_y, new_min_x:new_max_x, :]
             combined_cropped_images.append(combined_cropped_img)
 
-            combined_cropped_mask = masks[i][new_min_y:new_max_y, new_min_x:new_max_x]
+            combined_cropped_mask = mask[new_min_y:new_max_y, new_min_x:new_max_x]
             combined_cropped_masks.append(combined_cropped_mask)
 
         cropped_out = torch.stack(cropped_images, dim=0)
@@ -423,9 +445,12 @@ class ADBatchUncropAdvanced:
 
             return (int(new_x0), int(new_y0), int(new_x1), int(new_y1))
 
-        if len(original_images) != len(cropped_images):
-            raise ValueError(
-                f"The number of original_images ({len(original_images)}) and cropped_images ({len(cropped_images)}) should be the same"
+        original_count = len(original_images)
+        cropped_count = len(cropped_images)
+        if original_count != cropped_count:
+            print(
+                f"Warning: original_images ({original_count}) and cropped_images ({cropped_count}) differ. "
+                "Missing cropped frames will pass through unchanged."
             )
 
         if len(bboxes) > len(original_images):
@@ -434,27 +459,42 @@ class ADBatchUncropAdvanced:
             )
             bboxes = bboxes[: len(original_images)]
         elif len(bboxes) < len(original_images):
-            raise ValueError("There should be at least as many bboxes as there are original and cropped images")
+            print(
+                f"Warning: bboxes ({len(bboxes)}) shorter than original_images ({len(original_images)}). "
+                "Missing bboxes will use full-frame passthrough regions."
+            )
+            for i in range(len(bboxes), len(original_images)):
+                h = int(original_images[i].shape[0])
+                w = int(original_images[i].shape[1])
+                bboxes.append((0, 0, w, h))
 
-        crop_imgs = tensor2pil(cropped_images)
+        crop_imgs = tensor2pil(cropped_images) if cropped_count > 0 else []
         input_images = tensor2pil(original_images)
         out_images = []
 
         for i in range(len(input_images)):
             img = input_images[i]
+            if i >= cropped_count:
+                out_images.append(img.convert("RGB"))
+                continue
+
             crop = crop_imgs[i]
             bbox = bboxes[i]
+            frame_use_square_mask = use_square_mask
 
             if use_combined_mask:
                 if combined_bounding_box is None or len(combined_bounding_box) == 0:
                     raise ValueError("combined_bounding_box is required when use_combined_mask is True")
                 bb_x, bb_y, bb_width, bb_height = combined_bounding_box[0]
                 paste_region = bbox_to_region((bb_x, bb_y, bb_width, bb_height), img.size)
-                mask = combined_crop_mask[i]
+                mask = combined_crop_mask[i] if i < len(combined_crop_mask) else None
             else:
                 bb_x, bb_y, bb_width, bb_height = bbox
                 paste_region = bbox_to_region((bb_x, bb_y, bb_width, bb_height), img.size)
-                mask = cropped_masks[i]
+                mask = cropped_masks[i] if i < len(cropped_masks) else None
+
+            if mask is None:
+                frame_use_square_mask = True
 
             paste_region = scale_region_around_center(paste_region, crop_rescale, img.size)
 
@@ -471,7 +511,7 @@ class ADBatchUncropAdvanced:
             blend_ratio = (max(crop_img.size) / 2) * float(border_blending)
             blend = img.convert("RGBA")
 
-            if use_square_mask:
+            if frame_use_square_mask:
                 mask = Image.new("L", img.size, 0)
                 mask_block = Image.new("L", (crop_width, crop_height), 255)
                 mask_block = inset_border(mask_block, round(blend_ratio / 2), (0))
