@@ -1,13 +1,13 @@
-from .nodes.batchcrop_nodes import BatchCropFromMaskAdvanced, BatchUncropAdvanced
+from .nodes.batchcrop_nodes import ADBatchCropFromMaskAdvanced, ADBatchUncropAdvanced
 
 NODE_CLASS_MAPPINGS = {
-    "BatchCropFromMaskAdvanced": BatchCropFromMaskAdvanced,
-    "BatchUncropAdvanced": BatchUncropAdvanced,
+    "ADBatchCropFromMaskAdvanced": ADBatchCropFromMaskAdvanced,
+    "ADBatchUncropAdvanced": ADBatchUncropAdvanced,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "BatchCropFromMaskAdvanced": "Batch Crop From Mask Advanced",
-    "BatchUncropAdvanced": "Batch Uncrop Advanced",
+    "ADBatchCropFromMaskAdvanced": "AD Batch Crop From Mask Advanced",
+    "ADBatchUncropAdvanced": "AD Batch Uncrop Advanced",
 }
 
 WEB_DIRECTORY = "./web"

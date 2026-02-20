@@ -23,7 +23,7 @@ def bbox_to_region(bbox, target_size=None):
     return (bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3])
 
 
-class BatchCropFromMaskAdvanced:
+class ADBatchCropFromMaskAdvanced:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -286,7 +286,7 @@ class BatchCropFromMaskAdvanced:
         )
 
 
-class BatchUncropAdvanced:
+class ADBatchUncropAdvanced:
     @classmethod
     def INPUT_TYPES(cls):
         return {
