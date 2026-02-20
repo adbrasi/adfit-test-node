@@ -163,25 +163,48 @@ class ADBatchCropFromMaskAdvanced:
                 height = max(1, int(round(height * scale)))
             return width, height
 
+        def expand_to_aspect_cover(width, height, aspect):
+            width = max(1, int(round(width)))
+            height = max(1, int(round(height)))
+            if aspect <= 0:
+                return width, height
+
+            curr_aspect = width / height
+            if curr_aspect < aspect:
+                width = max(1, int(math.ceil(height * aspect)))
+            else:
+                height = max(1, int(math.ceil(width / aspect)))
+            return width, height
+
         mask_infos = [calculate_bbox(tensor2pil(mask)[0]) for mask in masks]
         non_empty_infos = [info for info in mask_infos if info["has_pixels"]]
 
         if preserve_aspect_ratio:
+            source_aspect = image_w / image_h
             if non_empty_infos:
                 curr_max_bbox_width = max(info["width"] for info in non_empty_infos)
                 curr_max_bbox_height = max(info["height"] for info in non_empty_infos)
             else:
                 curr_max_bbox_width = image_w
                 curr_max_bbox_height = image_h
+            curr_max_bbox_width, curr_max_bbox_height = expand_to_aspect_cover(
+                curr_max_bbox_width, curr_max_bbox_height, source_aspect
+            )
 
             prev_w = getattr(self, "_prev_max_bbox_width", curr_max_bbox_width)
             prev_h = getattr(self, "_prev_max_bbox_height", curr_max_bbox_height)
             max_bbox_width = self.smooth_bbox_size(prev_w, curr_max_bbox_width, bbox_smooth_alpha)
             max_bbox_height = self.smooth_bbox_size(prev_h, curr_max_bbox_height, bbox_smooth_alpha)
+            max_bbox_width, max_bbox_height = expand_to_aspect_cover(
+                max_bbox_width, max_bbox_height, source_aspect
+            )
             self._prev_max_bbox_width = max_bbox_width
             self._prev_max_bbox_height = max_bbox_height
             target_width = max(1, round(max_bbox_width * crop_size_mult))
             target_height = max(1, round(max_bbox_height * crop_size_mult))
+            target_width, target_height = expand_to_aspect_cover(
+                target_width, target_height, source_aspect
+            )
             target_width, target_height = clamp_dims_with_aspect(target_width, target_height, image_w, image_h)
 
             output_width, output_height = target_width, target_height
@@ -226,6 +249,9 @@ class ADBatchCropFromMaskAdvanced:
             combined_height = target_height
 
         if preserve_aspect_ratio:
+            combined_width, combined_height = expand_to_aspect_cover(
+                combined_width, combined_height, source_aspect
+            )
             combined_width, combined_height = clamp_dims_with_aspect(combined_width, combined_height, image_w, image_h)
         else:
             combined_size = max(combined_width, combined_height)
