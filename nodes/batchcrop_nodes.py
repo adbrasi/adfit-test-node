@@ -1,9 +1,22 @@
-from ..utility.utility import tensor2pil, pil2tensor
 from PIL import Image, ImageDraw, ImageFilter
 import numpy as np
 import torch
 from torchvision.transforms import Resize, InterpolationMode
 import math
+
+def pil2tensor(image):
+    if isinstance(image, list):
+        return torch.cat([pil2tensor(img) for img in image], dim=0)
+    return torch.from_numpy(np.array(image).astype(np.float32) / 255.0).unsqueeze(0)
+
+def tensor2pil(image):
+    batch_count = image.size(0) if len(image.shape) > 3 else 1
+    if batch_count > 1:
+        out = []
+        for i in range(batch_count):
+            out.extend(tensor2pil(image[i]))
+        return out
+    return [Image.fromarray(np.clip(255.0 * image.cpu().numpy().squeeze(), 0, 255).astype(np.uint8))]
 
 
 def bbox_check(bbox, target_size=None):
@@ -161,8 +174,12 @@ class ADBatchCropFromMaskAdvanced:
                 curr_max_bbox_width = image_w
                 curr_max_bbox_height = image_h
 
-            max_bbox_width = self.smooth_bbox_size(0, curr_max_bbox_width, bbox_smooth_alpha)
-            max_bbox_height = self.smooth_bbox_size(0, curr_max_bbox_height, bbox_smooth_alpha)
+            prev_w = getattr(self, "_prev_max_bbox_width", curr_max_bbox_width)
+            prev_h = getattr(self, "_prev_max_bbox_height", curr_max_bbox_height)
+            max_bbox_width = self.smooth_bbox_size(prev_w, curr_max_bbox_width, bbox_smooth_alpha)
+            max_bbox_height = self.smooth_bbox_size(prev_h, curr_max_bbox_height, bbox_smooth_alpha)
+            self._prev_max_bbox_width = max_bbox_width
+            self._prev_max_bbox_height = max_bbox_height
             target_width = max(1, round(max_bbox_width * crop_size_mult))
             target_height = max(1, round(max_bbox_height * crop_size_mult))
             target_width, target_height = clamp_dims_with_aspect(target_width, target_height, image_w, image_h)
@@ -176,7 +193,9 @@ class ADBatchCropFromMaskAdvanced:
             else:
                 curr_max_bbox_size = min(image_h, image_w)
 
-            max_bbox_size = self.smooth_bbox_size(0, curr_max_bbox_size, bbox_smooth_alpha)
+            prev_size = getattr(self, "_prev_max_bbox_size", curr_max_bbox_size)
+            max_bbox_size = self.smooth_bbox_size(prev_size, curr_max_bbox_size, bbox_smooth_alpha)
+            self._prev_max_bbox_size = max_bbox_size
             max_bbox_size = max(1, round(max_bbox_size * crop_size_mult))
             max_bbox_size = math.ceil(max_bbox_size / 16) * 16
 
