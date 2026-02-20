@@ -46,8 +46,8 @@ class ADBatchCropFromMaskAdvanced:
                 "crop_size_mult": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
                 "bbox_smooth_alpha": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "preserve_aspect_ratio": ("BOOLEAN", {"default": False}),
-                "max_width": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 1}),
-                "max_height": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 1}),
+                "resolution": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 1}),
+                "divisible_by": ("INT", {"default": 1, "min": 1, "max": 1024, "step": 1}),
             },
         }
 
@@ -97,7 +97,7 @@ class ADBatchCropFromMaskAdvanced:
             round(alpha * curr_center[1] + (1 - alpha) * prev_center[1]),
         )
 
-    def crop(self, masks, original_images, crop_size_mult, bbox_smooth_alpha, preserve_aspect_ratio, max_width, max_height):
+    def crop(self, masks, original_images, crop_size_mult, bbox_smooth_alpha, preserve_aspect_ratio, resolution, divisible_by):
         bounding_boxes = []
         combined_bounding_box = []
         cropped_images = []
@@ -181,6 +181,40 @@ class ADBatchCropFromMaskAdvanced:
                 height = max(1, int(round(height * scale)))
             return width, height
 
+        def round_to_divisible(value, div):
+            value = max(1, int(round(value)))
+            div = max(1, int(div))
+            if div == 1:
+                return value
+            rounded = int(round(value / div) * div)
+            return max(div, rounded)
+
+        def get_output_dimensions(base_w, base_h, preserve_ar, out_resolution, out_divisible_by):
+            base_w = max(1, int(round(base_w)))
+            base_h = max(1, int(round(base_h)))
+            out_resolution = max(0, int(out_resolution))
+            out_divisible_by = max(1, int(out_divisible_by))
+
+            if preserve_ar:
+                aspect = base_w / base_h
+                if out_resolution > 0:
+                    if aspect >= 1.0:
+                        out_w = out_resolution
+                        out_h = max(1, int(round(out_w / aspect)))
+                    else:
+                        out_h = out_resolution
+                        out_w = max(1, int(round(out_h * aspect)))
+                else:
+                    out_w, out_h = base_w, base_h
+
+                out_w = round_to_divisible(out_w, out_divisible_by)
+                out_h = round_to_divisible(out_h, out_divisible_by)
+                return out_w, out_h
+
+            side = out_resolution if out_resolution > 0 else max(base_w, base_h)
+            side = round_to_divisible(side, out_divisible_by)
+            return side, side
+
         def expand_to_aspect_cover(width, height, aspect):
             width = max(1, int(round(width)))
             height = max(1, int(round(height)))
@@ -224,10 +258,6 @@ class ADBatchCropFromMaskAdvanced:
                 target_width, target_height, source_aspect
             )
             target_width, target_height = clamp_dims_with_aspect(target_width, target_height, image_w, image_h)
-
-            output_width, output_height = target_width, target_height
-            if max_width > 0 or max_height > 0:
-                output_width, output_height = clamp_dims_with_aspect(output_width, output_height, max_width, max_height)
         else:
             if non_empty_infos:
                 curr_max_bbox_size = max(info["size"] for info in non_empty_infos)
@@ -249,8 +279,14 @@ class ADBatchCropFromMaskAdvanced:
 
             target_width = max_bbox_size
             target_height = max_bbox_size
-            output_width = target_width
-            output_height = target_height
+
+        output_width, output_height = get_output_dimensions(
+            target_width,
+            target_height,
+            preserve_aspect_ratio,
+            resolution,
+            divisible_by,
+        )
 
         if mask_count > 0:
             combined_mask = torch.max(masks, dim=0)[0]
@@ -261,24 +297,11 @@ class ADBatchCropFromMaskAdvanced:
         if combined_info["has_pixels"]:
             combined_center_x = combined_info["center_x"]
             combined_center_y = combined_info["center_y"]
-            combined_width = max(1, round(combined_info["width"] * crop_size_mult))
-            combined_height = max(1, round(combined_info["height"] * crop_size_mult))
         else:
             combined_center_x = image_w / 2.0
             combined_center_y = image_h / 2.0
-            combined_width = target_width
-            combined_height = target_height
-
-        if preserve_aspect_ratio:
-            combined_width, combined_height = expand_to_aspect_cover(
-                combined_width, combined_height, source_aspect
-            )
-            combined_width, combined_height = clamp_dims_with_aspect(combined_width, combined_height, image_w, image_h)
-        else:
-            combined_size = max(combined_width, combined_height)
-            combined_size = max(1, int(round(combined_size)))
-            combined_size = min(combined_size, min(image_w, image_h))
-            combined_width = combined_height = combined_size
+        combined_width = target_width
+        combined_height = target_height
 
         new_min_x, new_min_y, new_max_x, new_max_y = build_bbox(
             combined_center_x,
@@ -334,6 +357,12 @@ class ADBatchCropFromMaskAdvanced:
 
             combined_cropped_mask = mask[new_min_y:new_max_y, new_min_x:new_max_x]
             combined_cropped_masks.append(combined_cropped_mask)
+
+            if combined_cropped_img.shape[0] != output_height or combined_cropped_img.shape[1] != output_width:
+                image_resize = Resize((output_height, output_width))
+                mask_resize = Resize((output_height, output_width), interpolation=InterpolationMode.NEAREST)
+                combined_cropped_images[-1] = image_resize(combined_cropped_img.permute(2, 0, 1)).permute(1, 2, 0)
+                combined_cropped_masks[-1] = mask_resize(combined_cropped_mask.unsqueeze(0)).squeeze(0)
 
         cropped_out = torch.stack(cropped_images, dim=0)
         combined_crop_out = torch.stack(combined_cropped_images, dim=0)
