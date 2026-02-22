@@ -107,8 +107,6 @@ class ADBatchCropFromMaskAdvanced:
         combined_cropped_masks = []
 
         locked_on = tracking_mode == "locked_on"
-        if locked_on:
-            bbox_smooth_alpha = 1.0
 
         original_count = len(original_images)
         mask_count = len(masks)
@@ -329,17 +327,36 @@ class ADBatchCropFromMaskAdvanced:
             else:
                 curr_center = (image_w // 2, image_h // 2)
 
-            if i > 0:
+            if locked_on and bbox_smooth_alpha >= 1:
+                center = curr_center
+            elif i > 0:
                 center = self.smooth_center(self.prev_center, curr_center, bbox_smooth_alpha)
             else:
                 center = curr_center
             self.prev_center = center
 
+            if locked_on and info["has_pixels"]:
+                if preserve_aspect_ratio:
+                    fw, fh = expand_to_aspect_cover(info["width"], info["height"], source_aspect)
+                    fw = max(1, round(fw * crop_size_mult))
+                    fh = max(1, round(fh * crop_size_mult))
+                    fw, fh = expand_to_aspect_cover(fw, fh, source_aspect)
+                    fw, fh = clamp_dims_with_aspect(fw, fh, image_w, image_h)
+                else:
+                    fs = max(1, round(info["size"] * crop_size_mult))
+                    fs = math.ceil(fs / 16) * 16
+                    min_dim = min(image_h, image_w)
+                    if fs > min_dim:
+                        fs = (min_dim // 16) * 16 if min_dim >= 16 else min_dim
+                    fw, fh = fs, fs
+            else:
+                fw, fh = target_width, target_height
+
             min_x, min_y, max_x, max_y = build_bbox(
                 center[0],
                 center[1],
-                target_width,
-                target_height,
+                fw,
+                fh,
                 int(img.shape[1]),
                 int(img.shape[0]),
             )
