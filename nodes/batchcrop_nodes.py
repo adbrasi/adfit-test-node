@@ -45,6 +45,7 @@ class ADBatchCropFromMaskAdvanced:
                 "masks": ("MASK",),
                 "crop_size_mult": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
                 "bbox_smooth_alpha": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "tracking_mode": (["smooth", "locked_on"],),
                 "preserve_aspect_ratio": ("BOOLEAN", {"default": False}),
                 "resolution": ("INT", {"default": 0, "min": 0, "max": 16384, "step": 1}),
                 "divisible_by": ("INT", {"default": 1, "min": 1, "max": 1024, "step": 1}),
@@ -97,13 +98,17 @@ class ADBatchCropFromMaskAdvanced:
             round(alpha * curr_center[1] + (1 - alpha) * prev_center[1]),
         )
 
-    def crop(self, masks, original_images, crop_size_mult, bbox_smooth_alpha, preserve_aspect_ratio, resolution, divisible_by):
+    def crop(self, masks, original_images, crop_size_mult, bbox_smooth_alpha, tracking_mode, preserve_aspect_ratio, resolution, divisible_by):
         bounding_boxes = []
         combined_bounding_box = []
         cropped_images = []
         cropped_masks = []
         combined_cropped_images = []
         combined_cropped_masks = []
+
+        locked_on = tracking_mode == "locked_on"
+        if locked_on:
+            bbox_smooth_alpha = 1.0
 
         original_count = len(original_images)
         mask_count = len(masks)
